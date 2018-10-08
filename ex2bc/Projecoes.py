@@ -6,11 +6,11 @@ class Projecoes():
     def proj_perspectiva_mm(self, P, f):
         '''
         This function receives a point in the world coordenates
-        and transforms it to camera coordenates
+        and transforms it to image coordenates
         @param P: point in world coord
         @param f: focal distance
         '''
-        # p will be the point in the camera coord
+        # p will be the point in the image coord
         P = np.array(P)
         p = np.zeros((P.shape))
         for i in range(len(P[0])):
@@ -35,11 +35,15 @@ class Projecoes():
         @param H: homogeneous matrix
         returns Pw: points in camera coord
         '''
+        # transforming Pw into 4xN
+        Pw = np.append(Pw, [np.ones(len(Pw[0]))], axis=0)
         Pc = Pw.copy()
         # for each point in Pw
         for i in range(len(Pw[0])):
             # multiply each column of Pw with Pc
-            Pc[:, i] = np.multiply(H, Pw[:, i])
+            Pc[:, i] = np.matmul(H, Pw[:, i])
+        # transorming back into 3xN
+        Pc = np.delete(Pc, -1, 0)
         return Pc
 
     def homogenea(self, rotx, roty, rotz, dx, dy, dz):
@@ -69,13 +73,13 @@ class Projecoes():
               [0, 0, 1, 0],
               [0, 0, 0, 1]]
         # joining the rotations
-        R = np.multiply(Rx, Ry)
-        R = np.multiply(R, Rz)
+        R = np.matmul(Rx, Ry)
+        R = np.matmul(R, Rz)
         # defining the translation matrix
         T = [[1, 0, 0, dx],
              [0, 1, 0, dy],
              [0, 0, 1, dz],
              [0, 0, 0, 1]]
         # defining H = R*T
-        H = np.multiply(R, T)
+        H = np.matmul(R, T)
         return H

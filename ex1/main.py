@@ -17,7 +17,6 @@ if __name__ == '__main__':
     img = cv2.imread(img_name)
     # converting the color space from bgr to hsv
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    print(hsv[420][480])
     temp = []
     i = 0
     for (lower, upper, color) in colors:
@@ -39,6 +38,7 @@ if __name__ == '__main__':
     for image in temp:
         out = cv2.bitwise_or(out, image)
     kernel = np.ones((3, 3), np.uint8)
+    # improving the final image with topological operations
     out = cv2.dilate(out, kernel, iterations=1)
     out = cv2.erode(out, kernel, iterations=3)
     out = cv2.dilate(out, kernel, iterations=6)
