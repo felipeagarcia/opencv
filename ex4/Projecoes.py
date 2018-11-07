@@ -1,5 +1,6 @@
 import numpy as np
 from numpy import cos, sin
+import cv2
 
 
 class Projecoes():
@@ -27,6 +28,15 @@ class Projecoes():
             p_im[1][i] = -p[1][i]/sy + oy
         return p_im
 
+    def pixel_to_mm(self, p, sx, sy, ox, oy, f):
+        p = np.array(p)
+        p_mm = np.zeros((3, len(p[0])))
+        for i in range(len(p[0])):
+            p_mm[0][i] = -(p[0][i] - ox)/sx
+            p_mm[1][i] = -(p[1][i] - oy)/sy
+            p_mm[2][i] = f
+        return p_mm
+
     def mundo_para_camera(self, Pw, H):
         '''
         This function transforms a point in the world
@@ -45,6 +55,17 @@ class Projecoes():
         # transorming back into 3xN
         Pc = np.delete(Pc, -1, 0)
         return Pc.copy()
+
+    def camera_para_mundo(self, Pc, H):
+        Pc = np.append(Pc, [np.ones(len(Pc[0]))], axis=0)
+        Pw = Pc.copy()
+        # for each point in Pw
+        for i in range(len(Pc[0])):
+            # multiply each column of Pw with Pc
+            Pw[:, i] = np.matmul(np.linalg.inv(H), Pc[:, i])
+        # transorming back into 3xN
+        Pw = np.delete(Pw, -1, 0)
+        return Pw.copy()
 
     def homogenea(self, rotx, roty, rotz, dx, dy, dz):
         '''
@@ -173,33 +194,94 @@ class Projecoes():
         T[1] = sigma*(oy*T[-1] - M[1][3])/fy
         return f, sx, sy, ox, oy, R, T
 
-    def get_commum_point(self, Il, Ir):
-        Il = np.reshape(Il, 512*512)
-        Ir = np.reshape(Ir, 512*512)
-        corr = np.array([np.correlate([il], [ir]) for il, ir in zip(Il, Ir)])
-        x, y = np.argmax(corr) % 512, int(np.argmax(corr)/512)
-        return x, y
+    def get_commum_point(self, Il, Ir, W=5, threshold=0.75):
+        template = Il[int(len(Il)/2) - W: int(len(Il)/2) + W,
+                      int(len(Il)/2) - W: int(len(Il)/2) + W]
+        res = cv2.matchTemplate(Ir, template, cv2.TM_CCOEFF_NORMED)
+        loc = np.where(res >= threshold)
+        for pt in zip(*loc[::-1]):
+            point2 = pt
+        point1 = (int(len(Il)/2),
+                  int(len(Il)/2))
+        return point1, point2
 
-    def get_essential_matrix(self, Il, Ir, Ol, Or):
-        x, y = self.get_commum_point(Il, Ir)
-        Pl = [x, y, 0]
-        Pr = [x, y, 0]
+    def get_commum_points(self, Il, Ir, W=5, threshold=0.75):
+        template = Il[int(len(Il)/2) - W: int(len(Il)/2) + W,
+                      int(len(Il)/2) - W: int(len(Il)/2) + W]
+        res = cv2.matchTemplate(Ir, template, cv2.TM_CCOEFF_NORMED)
+        loc = np.where(res >= threshold)
+        points1 = []
+        for i in range(W):
+            points1.append((int(len(Il)/2)+i, int(len(Il)/2)))
+        for i in range(W):
+            points1.append((int(len(Il)/2), int(len(Il)/2)+i))
+        points2 = []
+        for pt in zip(*loc[::-1]):
+            points2.append(pt)
+        points2 = np.array(points2)
+        points1 = np.reshape(points1, (2, 2*W))
+        points2 = points2[:2*W]
+        points2 = np.reshape(points2, (2, 2*W))
+        return points1, points2
+
+    def get_essential_matrix(self, R, Ol, Or):
         T = Ol - Or
-        R = Pr*np.linalg.pinv([Pl - T])
-        S = [[0, -T[2], T[1]],
-             [T[2], 0, -T[0]],
-             [-T[1], T[0], 0]]
-        E = np.dot(R, S)
+        R = R[:3, :3]
+        E = T[0]*R
         return E
 
-    def get_fundamental_matrix(self, Pwl, Pwr, Il, Ir, Ol, Or):
-        E = self.get_essential_matrix(Il, Ir, Ol, Or)
-        Al = self.get_A(Pwl, Il)
-        Ml = self.get_M(Al)
-        Ml = np.reshape(Ml, (3, 4))
-        Ar = self.get_A(Pwr, Ir)
-        Mr = self.get_M(Ar)
-        Mr = np.reshape(Mr, (3, 4))
-        F = np.dot(np.linalg.pinv(Mr), E)
-        F = np.dot(F, np.linalg.pinv(np.transpose(Ml)))
+    def get_fundamental_matrix(self, Pwl, Pwr, Il, Ir, Ol, Or, Pw, R):
+        E = self.get_essential_matrix(R, Ol, Or)
+        fl, sx, sy, ox, oy, R, T = self.calibration(Pw, Il)
+        fr, sx, sy, ox, oy, R, T = self.calibration(Pw, Ir)
+        Ml = np.identity(3) * fl
+        Ml[-1][-1] = 1
+        Mr = np.identity(3) * fr
+        Mr[-1][-1] = 1
+        F = np.matmul(np.linalg.inv(Mr), np.matmul(E, np.linalg.inv(Ml)))
         return F
+
+    def get_A_F(self, pl, pr):
+        A = np.zeros((8, 9))
+        for i in range(len(pl)):
+            A[i] = [pr[0][i]*pl[0][i], pr[0][i]*pl[1][i], pr[0][i],
+                    pr[1][i]*pl[0][i], pr[1][i]*pl[1][i], pr[1][i],
+                    pl[0][i], pl[1][i], 1]
+        return A
+
+    def get_fundamental_matrix_svd(self, Il, Ir, d):
+        A = self.get_A_F(Il[0:8], Ir[0:8])
+        F = self.get_M(A)
+        F = np.reshape(F, (3, 3))
+        return F
+
+    def get_epipoles(self, F):
+        epipole_left = self.get_M(F)
+        epipole_right = self.get_M(np.transpose(F))
+        return epipole_left, epipole_right
+
+    def get_abc(self, pl, pr, R, T):
+        Rt = np.matrix.transpose(R)
+        A = np.empty((0, 3), float)
+        A = []
+        for i in range(3):
+            A.append([pl[:, i], -np.matmul(Rt, pr[:, i]),
+                     np.cross(pl[:, i], np.matmul(Rt, pr[:, i]))])
+        A = np.array(A)
+        abc = np.linalg.solve(A, [T])
+        return abc
+
+    def get_w(self, pl, pr, R):
+        Rt = np.transpose(R)
+        w = np.cross(pl[:, 0], np.matmul(Rt, pr[:, 0]))
+        return w
+
+    def triangulacao(self, Hl, Hr):
+        Rl = Hl[:3, :3]
+        Tl = Hl[:3, -1]
+        Rr = Hr[:3, :3]
+        Tr = Hr[:3, -1]
+        R = np.matmul(Rr, np.transpose(Rl))
+        T = Tl - np.matmul(np.transpose(R), Tr)
+        T = np.reshape(T, (3, 1))
+        return R, T.copy()
